@@ -92,7 +92,10 @@ def detect(model, img0):
     gn = torch.tensor(img0.shape)[[1, 0, 1, 0]].to(device)  # normalization gain whwh
     gn_lks = torch.tensor(img0.shape)[[1, 0, 1, 0, 1, 0, 1, 0, 1, 0]].to(device)  # normalization gain landmarks
     boxes = []
+    # landmark result
+    landmarks = []
     h, w, c = img0.shape
+    nn, mm = pred.shape
     if pred is not None:
         pred[:, :4] = scale_coords(img.shape[2:], pred[:, :4], img0.shape).round()
         pred[:, 5:15] = scale_coords_landmarks(img.shape[2:], pred[:, 5:15], img0.shape).round()
@@ -100,63 +103,58 @@ def detect(model, img0):
             xywh = (xyxy2xywh(pred[j, :4].view(1, 4)) / gn).view(-1)
             xywh = xywh.data.cpu().numpy()
             conf = pred[j, 4].cpu().numpy()
-            landmarks = (pred[j, 5:15].view(1, 10) / gn_lks).view(-1).tolist()
-            class_num = pred[j, 15].cpu().numpy()
+            # get predicted landmark
+            landmark = (pred[j, 5:15].view(1, 10)).view(-1).tolist()
+            # landmarks = (pred[j, 5:15].view(1, 10) / gn_lks).view(-1).tolist()
+            if mm>16:
+                class_num = pred[j, 18].cpu().numpy()
+            else:
+                class_num = pred[j, 15].cpu().numpy()
             x1 = int(xywh[0] * w - 0.5 * xywh[2] * w)
             y1 = int(xywh[1] * h - 0.5 * xywh[3] * h)
             x2 = int(xywh[0] * w + 0.5 * xywh[2] * w)
             y2 = int(xywh[1] * h + 0.5 * xywh[3] * h)
             boxes.append([x1, y1, x2-x1, y2-y1, conf])
-    return boxes
+            landmarks.append(landmark)
+    
+    if mm>16:
+        return boxes, landmarks, (pred[:, 15:18]*360-180).tolist()
+    else:
+        return boxes, landmarks, []
 
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default='runs/train/exp5/weights/last.pt', help='model.pt path(s)')
-    parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
-    parser.add_argument('--conf-thres', type=float, default=0.02, help='object confidence threshold')
-    parser.add_argument('--iou-thres', type=float, default=0.5, help='IOU threshold for NMS')
-    parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
-    parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
-    parser.add_argument('--augment', action='store_true', help='augmented inference')
-    parser.add_argument('--update', action='store_true', help='update all models')
-    parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --class 0, or --class 0 2 3')
-    parser.add_argument('--project', default='runs/detect', help='save results to project/name')
-    parser.add_argument('--name', default='exp', help='save results to project/name')
-    parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
-    parser.add_argument('--save_folder', default='./widerface_evaluate/widerface_txt/', type=str, help='Dir to save txt results')
-    parser.add_argument('--dataset_folder', default='../WiderFace/val/images/', type=str, help='dataset path')
-    parser.add_argument('--folder_pict', default='/yolov5-face/data/widerface/val/wider_val.txt', type=str, help='folder_pict')
-    opt = parser.parse_args()
-    print(opt)
-
-    # changhy : read folder_pict
+def start(opt):
     pict_folder = {}
     with open(opt.folder_pict, 'r') as f:
         lines = f.readlines()
         for line in lines:
             line = line.strip().split('/')
-            pict_folder[line[-1]] = line[-2]
+            if(len(line)<2):
+                continue
+            if os.path.exists('dataset/widerface_multitask/val/'+line[-1]):
+                pict_folder[line[-1]] = line[-2]
 
     # Load model
-    device = select_device(opt.device)
+    
     model = attempt_load(opt.weights, map_location=device)  # load FP32 model
     with torch.no_grad():
         # testing dataset
         testset_folder = opt.dataset_folder
 
         for image_path in tqdm(glob.glob(os.path.join(testset_folder, '*'))):
+            # print('!!!!!', image_path)
             if image_path.endswith('.txt'):
                 continue
             img0 = cv2.imread(image_path)  # BGR
             if img0 is None:
                 print(f'ignore : {image_path}')
                 continue
-            boxes = detect(model, img0)
+            # get predicted landmark and alignments
+            boxes, landmarks, alignments = detect(model, img0)
             # --------------------------------------------------------------------
             image_name = os.path.basename(image_path)
             txt_name = os.path.splitext(image_name)[0] + ".txt"
             save_name = os.path.join(opt.save_folder, pict_folder[image_name], txt_name)
+            # print(save_name)
             dirname = os.path.dirname(save_name)
             if not os.path.isdir(dirname):
                 os.makedirs(dirname)
@@ -165,6 +163,39 @@ if __name__ == '__main__':
                 bboxs_num = str(len(boxes)) + "\n"
                 fd.write(file_name)
                 fd.write(bboxs_num)
-                for box in boxes:
-                    fd.write('%d %d %d %d %.03f' % (box[0], box[1], box[2], box[3], box[4] if box[4] <= 1 else 1) + '\n')
+                # save predicted results
+                for i in range(len(boxes)):
+                    box = boxes[i]
+                    landmark = landmarks[i]
+                    if len(alignments) > 0:
+                        alignment = alignments[i]
+                        fd.write('%d %d %d %d %.03f %d %d %d %d %d %d %d %d %d %d %.03f %.03f %.03f' % (box[0], box[1], box[2], box[3], box[4] if box[4] <= 1 else 1, landmark[0], landmark[1], landmark[2], landmark[3], landmark[4], landmark[5], landmark[6], landmark[7], landmark[8], landmark[9], alignment[0], alignment[1], alignment[2]) + '\n')
+                    else:
+                        fd.write('%d %d %d %d %.03f %d %d %d %d %d %d %d %d %d %d' % (box[0], box[1], box[2], box[3], box[4] if box[4] <= 1 else 1, landmark[0], landmark[1], landmark[2], landmark[3], landmark[4], landmark[5], landmark[6], landmark[7], landmark[8], landmark[9]) + '\n')
         print('done.')
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--weights', nargs='+', type=str, default='runs_origin_newdata/train/exp2/weights/best.pt', help='model.pt path(s)')
+    parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
+    parser.add_argument('--conf-thres', type=float, default=0.02, help='object confidence threshold')
+    parser.add_argument('--iou-thres', type=float, default=0.5, help='IOU threshold for NMS')
+    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
+    parser.add_argument('--augment', action='store_true', help='augmented inference')
+    parser.add_argument('--update', action='store_true', help='update all models')
+    parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --class 0, or --class 0 2 3')
+    parser.add_argument('--project', default='runs_0.5/detect', help='save results to project/name')
+    parser.add_argument('--name', default='exp', help='save results to project/name')
+    parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
+    parser.add_argument('--save_folder', default='./widerface_evaluate/widerface_txt_baseline/', type=str, help='Dir to save txt results')
+    parser.add_argument('--dataset_folder', default='dataset/widerface_multitask/val/', type=str, help='dataset path')
+    parser.add_argument('--folder_pict', default='dataset/widerface_multitask/label.txt', type=str, help='folder_pict')
+    opt = parser.parse_args()
+    print(opt)
+
+    # changhy : read folder_pict
+device = select_device(opt.device)
+if not os.path.exists(opt.save_folder):
+    os.makedirs(opt.save_folder)
+    start(opt)

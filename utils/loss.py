@@ -115,14 +115,16 @@ class LandmarksLoss(nn.Module):
 
 def compute_loss(p, targets, model):  # predictions, targets, model
     device = targets.device
-    lcls, lbox, lobj, lmark = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
-    tcls, tbox, indices, anchors, tlandmarks, lmks_mask = build_targets(p, targets, model)  # targets
+    # update for loss function
+    lcls, lbox, lobj, lmark, lalign = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
+    tcls, tbox, indices, anchors, tlandmarks, lmks_mask, talignment = build_targets(p, targets, model)  # targets
     h = model.hyp  # hyperparameters
 
     # Define criteria
     BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h['cls_pw']], device=device))  # weight=model.class_weights)
     BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h['obj_pw']], device=device))
-
+    # update for loss function
+    alignLoss = nn.MSELoss()
     landmarks_loss = LandmarksLoss(1.0)
 
     # Class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
@@ -152,7 +154,11 @@ def compute_loss(p, targets, model):  # predictions, targets, model
             pbox = torch.cat((pxy, pwh), 1)  # predicted box
             iou = bbox_iou(pbox.T, tbox[i], x1y1x2y2=False, CIoU=True)  # iou(prediction, target)
             lbox += (1.0 - iou).mean()  # iou loss
-
+            # update for loss function
+            prow = ps[...,-3]
+            ppitch = ps[...,-2]
+            pyaw = ps[...,-1]
+            lalign += (alignLoss(prow, (talignment[i][:,-3]+180)/360) + alignLoss(ppitch, (talignment[i][:,-2]+180)/360) + alignLoss(pyaw, (talignment[i][:,-1]+180)/360)).unsqueeze(0)
             # Objectness
             tobj[b, a, gj, gi] = (1.0 - model.gr) + model.gr * iou.detach().clamp(0).type(tobj.dtype)  # iou ratio
 
@@ -186,20 +192,23 @@ def compute_loss(p, targets, model):  # predictions, targets, model
     lobj *= h['obj'] * s * (1.4 if no == 4 else 1.)
     lcls *= h['cls'] * s
     lmark *= h['landmark'] * s
+    # update for loss function
+    lalign *= h['align'] * s
 
     bs = tobj.shape[0]  # batch size
 
-    loss = lbox + lobj + lcls + lmark
-    return loss * bs, torch.cat((lbox, lobj, lcls, lmark, loss)).detach()
+    loss = lbox + lobj + lcls + lmark + lalign
+    return loss * bs, torch.cat((lbox, lobj, lcls, lmark, lalign, loss)).detach()
 
 
 def build_targets(p, targets, model):
     # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
     det = model.module.model[-1] if is_parallel(model) else model.model[-1]  # Detect() module
     na, nt = det.na, targets.shape[0]  # number of anchors, targets
-    tcls, tbox, indices, anch, landmarks, lmks_mask = [], [], [], [], [], []
+    # update for loss function
+    tcls, tbox, indices, anch, landmarks, lmks_mask, talignment = [], [], [], [], [], [], []
     #gain = torch.ones(7, device=targets.device)  # normalized to gridspace gain
-    gain = torch.ones(17, device=targets.device)
+    gain = torch.ones(20, device=targets.device)
     ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
     targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
 
@@ -244,11 +253,13 @@ def build_targets(p, targets, model):
         gi, gj = gij.T  # grid xy indices
 
         # Append
-        a = t[:, 16].long()  # anchor indices
-        indices.append((b, a, gj.clamp_(0, gain[3] - 1), gi.clamp_(0, gain[2] - 1)))  # image, anchor, grid indices
+        # update for loss function
+        a = t[:, 19].long()  # anchor indices
+        indices.append((b, a, gj.clamp_(0, int(gain[3]) - 1), gi.clamp_(0, int(gain[2]) - 1)))  # image, anchor, grid indices
         tbox.append(torch.cat((gxy - gij, gwh), 1))  # box
         anch.append(anchors[a])  # anchors
         tcls.append(c)  # class
+        talignment.append(t[:,16:19])
 
         #landmarks
         lks = t[:,6:16]
@@ -301,4 +312,4 @@ def build_targets(p, targets, model):
         landmarks.append(lks)
         #print('lks: ',  lks.size())
 
-    return tcls, tbox, indices, anch, landmarks, lmks_mask
+    return tcls, tbox, indices, anch, landmarks, lmks_mask, talignment

@@ -39,7 +39,7 @@ def get_hash(files):
 def img2label_paths(img_paths):
     # Define label paths as a function of image paths
     sa, sb = os.sep + 'images' + os.sep, os.sep + 'labels' + os.sep  # /images/, /labels/ substrings
-    return [x.replace(sa, sb, 1).replace('.' + x.split('.')[-1], '.txt') for x in img_paths]
+    return [x.replace(sa, sb, 1).replace('.' + x.split('.')[-1], '_refine.txt') for x in img_paths]
 
 def exif_size(img):
     # Returns exif-corrected PIL size
@@ -232,9 +232,9 @@ class LoadFaceImagesAndLabels(Dataset):  # for training/testing
                     with open(lb_file, 'r') as f:
                         l = np.array([x.split() for x in f.read().strip().splitlines()], dtype=np.float32)  # labels
                     if len(l):
-                        assert l.shape[1] == 15, 'labels require 15 columns each'
-                        assert (l >= -1).all(), 'negative labels'
-                        assert (l[:, 1:] <= 1).all(), 'non-normalized or out of bounds coordinate labels'
+                        assert l.shape[1] == 23, 'labels require 23 columns each'
+                        assert (l[:, :-8] >= -1).all(), 'negative labels'
+                        assert (l[:, 1:-8] <= 1).all(), 'non-normalized or out of bounds coordinate labels'
                         assert np.unique(l, axis=0).shape[0] == l.shape[0], 'duplicate labels'
                     else:
                         ne += 1  # label empty
@@ -300,10 +300,10 @@ class LoadFaceImagesAndLabels(Dataset):  # for training/testing
             if x.size > 0:
                 # Normalized xywh to pixel xyxy format
                 labels = x.copy()
-                labels[:, 1] = ratio[0] * w * (x[:, 1] - x[:, 3] / 2) + pad[0]  # pad width
-                labels[:, 2] = ratio[1] * h * (x[:, 2] - x[:, 4] / 2) + pad[1]  # pad height
-                labels[:, 3] = ratio[0] * w * (x[:, 1] + x[:, 3] / 2) + pad[0]
-                labels[:, 4] = ratio[1] * h * (x[:, 2] + x[:, 4] / 2) + pad[1]
+                labels[:, 1] = ratio[0] * w * (x[:, 18] - x[:, 20] / 2) + pad[0]  # pad width
+                labels[:, 2] = ratio[1] * h * (x[:, 19] - x[:, 21] / 2) + pad[1]  # pad height
+                labels[:, 3] = ratio[0] * w * (x[:, 18] + x[:, 20] / 2) + pad[0]
+                labels[:, 4] = ratio[1] * h * (x[:, 19] + x[:, 21] / 2) + pad[1]
 
                 #labels[:, 5] = ratio[0] * w * x[:, 5] + pad[0]  # pad width
                 labels[:, 5] = np.array(x[:, 5] > 0, dtype=np.int32) * (ratio[0] * w * x[:, 5] + pad[0]) + (
@@ -326,6 +326,9 @@ class LoadFaceImagesAndLabels(Dataset):  # for training/testing
                     np.array(x[:, 13] > 0, dtype=np.int32) - 1)
                 labels[:, 14] = np.array(x[:, 14] > 0, dtype=np.int32) * (ratio[1] * h * x[:, 14] + pad[1]) + (
                     np.array(x[:, 14] > 0, dtype=np.int32) - 1)
+                labels[:, 15] = x[:, 22]
+                labels[:, 16] = x[:, 16]
+                labels[:, 17] = x[:, 17]
 
         if self.augment:
             # Augment imagespace
@@ -387,10 +390,11 @@ class LoadFaceImagesAndLabels(Dataset):  # for training/testing
                     labels[:, [7, 8]] = eye_left
                     labels[:, [11, 12]] = labels[:, [13, 14]]
                     labels[:, [13, 14]] = mouth_left
+                    labels[:, 15] = -labels[:, 15]
 
-        labels_out = torch.zeros((nL, 16))
+        labels_out = torch.zeros((nL, 19))
         if nL:
-            labels_out[:, 1:] = torch.from_numpy(labels)
+            labels_out[:, 1:] = torch.from_numpy(labels[:,0:18])
             #showlabels(img, labels[:, 1:5], labels[:, 5:15])
 
         # Convert
@@ -457,10 +461,10 @@ def load_mosaic_face(self, index):
         labels = x.copy()
         if x.size > 0:  # Normalized xywh to pixel xyxy format
             #box, x1,y1,x2,y2
-            labels[:, 1] = w * (x[:, 1] - x[:, 3] / 2) + padw
-            labels[:, 2] = h * (x[:, 2] - x[:, 4] / 2) + padh
-            labels[:, 3] = w * (x[:, 1] + x[:, 3] / 2) + padw
-            labels[:, 4] = h * (x[:, 2] + x[:, 4] / 2) + padh
+            labels[:, 1] = w * (x[:, 18] - x[:, 20] / 2) + padw
+            labels[:, 2] = h * (x[:, 19] - x[:, 21] / 2) + padh
+            labels[:, 3] = w * (x[:, 18] + x[:, 20] / 2) + padw
+            labels[:, 4] = h * (x[:, 19] + x[:, 21] / 2) + padh
             #10 landmarks
 
             labels[:, 5] = np.array(x[:, 5] > 0, dtype=np.int32) * (w * x[:, 5] + padw) + (np.array(x[:, 5] > 0, dtype=np.int32) - 1)
@@ -473,6 +477,9 @@ def load_mosaic_face(self, index):
             labels[:, 12] = np.array(x[:, 12] > 0, dtype=np.int32) * (h * x[:, 12] + padh) + (np.array(x[:, 12] > 0, dtype=np.int32) - 1)
             labels[:, 13] = np.array(x[:, 13] > 0, dtype=np.int32) * (w * x[:, 13] + padw) + (np.array(x[:, 13] > 0, dtype=np.int32) - 1)
             labels[:, 14] = np.array(x[:, 14] > 0, dtype=np.int32) * (h * x[:, 14] + padh) + (np.array(x[:, 14] > 0, dtype=np.int32) - 1)
+            labels[:, 15] = x[:, 22]
+            labels[:, 16] = x[:, 16]
+            labels[:, 17] = x[:, 17]
         labels4.append(labels)
 
     # Concat/clip labels
@@ -482,8 +489,8 @@ def load_mosaic_face(self, index):
         # img4, labels4 = replicate(img4, labels4)  # replicate
 
         #landmarks
-        labels4[:, 5:] = np.where(labels4[:, 5:] < 0, -1, labels4[:, 5:])
-        labels4[:, 5:] = np.where(labels4[:, 5:] > 2 * s, -1, labels4[:, 5:])
+        labels4[:, 5:15] = np.where(labels4[:, 5:15] < 0, -1, labels4[:, 5:15])
+        labels4[:, 5:15] = np.where(labels4[:, 5:15] > 2 * s, -1, labels4[:, 5:15])
 
         labels4[:, 5] = np.where(labels4[:, 6] == -1, -1, labels4[:, 5])
         labels4[:, 6] = np.where(labels4[:, 5] == -1, -1, labels4[:, 6])
@@ -664,7 +671,7 @@ def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shea
         y = xy[:, [1, 3, 5, 7]]
 
         landmarks = xy[:, [8, 9, 10, 11, 12, 13, 14, 15, 16, 17]]
-        mask = np.array(targets[:, 5:] > 0, dtype=np.int32)
+        mask = np.array(targets[:, 5:15] > 0, dtype=np.int32)
         landmarks = landmarks * mask
         landmarks = landmarks + mask - 1
 
@@ -687,7 +694,7 @@ def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shea
         landmarks[:, 8] = np.where(landmarks[:, 9] == -1, -1, landmarks[:, 8])
         landmarks[:, 9] = np.where(landmarks[:, 8] == -1, -1, landmarks[:, 9])
 
-        targets[:,5:] = landmarks
+        targets[:,5:15] = landmarks
 
         xy = np.concatenate((x.min(1), y.min(1), x.max(1), y.max(1))).reshape(4, n).T
 

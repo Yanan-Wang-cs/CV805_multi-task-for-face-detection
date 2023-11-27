@@ -103,26 +103,27 @@ def detection_collate(batch):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 1:
-        print('Missing path to WIDERFACE train folder.')
-        print('Run command: python3 train2yolo.py /path/to/original/widerface/train [/path/to/save/widerface/train]')
-        exit(1)
-    elif len(sys.argv) > 3:
-        print('Too many arguments were provided.')
-        print('Run command: python3 train2yolo.py /path/to/original/widerface/train [/path/to/save/widerface/train]')
-        exit(1)
-    original_path = sys.argv[1]
+    # if len(sys.argv) == 1:
+    #     print('Missing path to WIDERFACE train folder.')
+    #     print('Run command: python3 train2yolo.py /path/to/original/widerface/train [/path/to/save/widerface/train]')
+    #     exit(1)
+    # elif len(sys.argv) > 3:
+    #     print('Too many arguments were provided.')
+    #     print('Run command: python3 train2yolo.py /path/to/original/widerface/train [/path/to/save/widerface/train]')
+    #     exit(1)
+    # original_path = sys.argv[1]
+    original_path = '/home/yanan/cv/yolov5-face/dataset/origin/WIDER_train'
+    save_path = '/home/yanan/cv/yolov5-face/dataset/widerface/train'
+    # if len(sys.argv) == 2:
+    #     if not os.path.isdir('widerface'):
+    #         os.mkdir('widerface')
+    #     if not os.path.isdir('widerface/train'):
+    #         os.mkdir('widerface/train')
 
-    if len(sys.argv) == 2:
-        if not os.path.isdir('widerface'):
-            os.mkdir('widerface')
-        if not os.path.isdir('widerface/train'):
-            os.mkdir('widerface/train')
-
-        save_path = 'widerface/train'
-    else:
-        save_path = sys.argv[2]
-
+    #     save_path = 'widerface/train'
+    # else:
+    #     save_path = sys.argv[2]
+    print(os.path.join(original_path, 'label.txt'))
     if not os.path.isfile(os.path.join(original_path, 'label.txt')):
         print('Missing label.txt file.')
         exit(1)

@@ -1,9 +1,3 @@
-"""
-WiderFace evaluation code
-author: wondervictor
-mail: tianhengcheng@gmail.com
-copyright@wondervictor
-"""
 
 import os
 import tqdm
@@ -13,70 +7,183 @@ import numpy as np
 from scipy.io import loadmat
 from bbox import bbox_overlaps
 from IPython import embed
+import cv2
+import torch
+import math
 
 
-def get_gt_boxes(gt_dir):
-    """ gt dir: (wider_face_val.mat, wider_easy_val.mat, wider_medium_val.mat, wider_hard_val.mat)"""
+saveResultImg = False
+output_folder = '/home/yanan/cv/yolov5-face/img/'
 
-    gt_mat = loadmat(os.path.join(gt_dir, 'wider_face_val.mat'))
-    hard_mat = loadmat(os.path.join(gt_dir, 'wider_hard_val.mat'))
-    medium_mat = loadmat(os.path.join(gt_dir, 'wider_medium_val.mat'))
-    easy_mat = loadmat(os.path.join(gt_dir, 'wider_easy_val.mat'))
+# NME, metric for keypoint detection
+def mean_euclidean_distance(pred_points, true_points):
+    distances = np.linalg.norm(pred_points - true_points, axis=1)
+    mean_distance = np.mean(distances)
+    return mean_distance
 
-    facebox_list = gt_mat['face_bbx_list']
-    event_list = gt_mat['event_list']
-    file_list = gt_mat['file_list']
+# MAE, metric for alignment
+def euler_angles_mae(pred_angles, true_angles):
+    # Convert angles to radians
+    pred_angles_rad = np.radians(pred_angles)
+    true_angles_rad = np.radians(true_angles)
 
-    hard_gt_list = hard_mat['gt_list']
-    medium_gt_list = medium_mat['gt_list']
-    easy_gt_list = easy_mat['gt_list']
+    # Calculate absolute differences in radians
+    abs_diff_rad = np.abs(pred_angles_rad - true_angles_rad)
 
-    return facebox_list, event_list, file_list, hard_gt_list, medium_gt_list, easy_gt_list
+    # Convert absolute differences back to degrees
+    abs_diff_deg = np.degrees(abs_diff_rad)
 
+    # Calculate the mean absolute error
+    mae = np.mean(abs_diff_deg)
+    
+    return mae
 
-def get_gt_boxes_from_txt(gt_path, cache_dir):
+# Accuracy, metric for face detection
+def calculate_iou(gt, pred):
+    box1 = [int(pred[0]), int(pred[1]), int(pred[0]+pred[2]), int(pred[1]+pred[3])]
+    box2 = [int(gt[0]-gt[2]/2), int(gt[1]-gt[3]/2), int(gt[0]+gt[2]/2), int(gt[1]+gt[3]/2)]
+    # Calculate the intersection coordinates
+    x_min_inter = max(box1[0], box2[0])
+    y_min_inter = max(box1[1], box2[1])
+    x_max_inter = min(box1[2], box2[2])
+    y_max_inter = min(box1[3], box2[3])
 
-    cache_file = os.path.join(cache_dir, 'gt_cache.pkl')
-    if os.path.exists(cache_file):
-        f = open(cache_file, 'rb')
-        boxes = pickle.load(f)
-        f.close()
-        return boxes
+    # Calculate intersection area
+    intersection_area = max(0, x_max_inter - x_min_inter) * max(0, y_max_inter - y_min_inter)
 
-    f = open(gt_path, 'r')
-    state = 0
-    lines = f.readlines()
-    lines = list(map(lambda x: x.rstrip('\r\n'), lines))
-    boxes = {}
-    print(len(lines))
-    f.close()
-    current_boxes = []
-    current_name = None
-    for line in lines:
-        if state == 0 and '--' in line:
-            state = 1
-            current_name = line
-            continue
-        if state == 1:
-            state = 2
-            continue
+    # Calculate union area
+    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    union_area = box1_area + box2_area - intersection_area
 
-        if state == 2 and '--' in line:
-            state = 1
-            boxes[current_name] = np.array(current_boxes).astype('float32')
-            current_name = line
-            current_boxes = []
-            continue
+    # Calculate IoU
+    iou = intersection_area / union_area if union_area > 0 else 0.0
 
-        if state == 2:
-            box = [float(x) for x in line.split(' ')[:4]]
-            current_boxes.append(box)
-            continue
+    return iou
 
-    f = open(cache_file, 'wb')
-    pickle.dump(boxes, f)
-    f.close()
-    return boxes
+def face_detection_accuracy(true_boxes, pred,gt, img, iou_threshold=0.5):
+    true_positive = 0
+    false_positive = 0
+    false_negative = 0
+    pred_boxes = pred[...,0:4]
+    landmark_pred = []
+    landmark_gt = []
+    alignment_pred = []
+    alignment_gt = []
+    for i in range(len(true_boxes)):
+        box_matched = False
+        for j in range(len(pred_boxes)):
+            iou = calculate_iou(true_boxes[i], pred_boxes[j])
+            if iou >= iou_threshold:
+                true_positive += 1
+                box_matched = True
+                if saveResultImg:
+                    if len(pred[j]) > 15:
+                        angle = -pred[j][15]
+                        center = (int(pred[j][9]), int(pred[j][10]))
+                        roll = int(pred[j][15])
+                        pitch = int(pred[j][16])
+                        yaw = int(pred[j][17])
+
+                        roll = roll * np.pi / 180
+                        pitch = pitch * np.pi / 180
+                        yaw = -(yaw * np.pi / 180)
+                        size = 30
+                        (tdx, tdy) = center
+                        x1 = size * (np.cos(yaw) * np.cos(roll)) + tdx
+                        y1 = size * (np.cos(pitch) * np.sin(roll) + np.cos(roll) * np.sin(pitch) * np.sin(yaw)) + tdy
+
+                        x2 = -size * (-np.cos(yaw) * np.sin(roll)) + tdx
+                        y2 = -size * (np.cos(pitch) * np.cos(roll) - np.sin(pitch) * np.sin(yaw) * np.sin(roll)) + tdy
+
+                        x3 = size * (np.sin(yaw)) + tdx
+                        y3 = size * (-np.cos(yaw) * np.sin(pitch)) + tdy
+                        cv2.arrowedLine(img, (int(tdx), int(tdy)), (int(x1), int(y1)), (221,234,17), int(img.shape[0] * 0.005))
+                        cv2.arrowedLine(img, (int(tdx), int(tdy)), (int(x2), int(y2)), (0,255,0), int(img.shape[0] * 0.005))
+                        cv2.arrowedLine(img, (int(tdx), int(tdy)), (int(x3), int(y3)), (0,0,255), int(img.shape[0] * 0.005))
+
+                        cv2.putText(img, ('pitch: {}').format(int(pitch)), (int(pred[j][0]-50),int(pred[j][1]+pred[j][3]+80)), cv2.FONT_HERSHEY_SIMPLEX, 1, (221,234,17), thickness=2, lineType=2)
+                        cv2.putText(img, ('roll: {}').format(int(roll)), (int(pred[j][0]-50),int(pred[j][1]+pred[j][3]+120)), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), thickness=2, lineType=2)
+                        cv2.putText(img, ('yaw: {}').format(int(yaw)), (int(pred[j][0]-50),int(pred[j][1]+pred[j][3]+160)), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), thickness=2, lineType=2)
+                    else:
+                        angle = 1
+                    rect = ((pred_boxes[j][0]+pred_boxes[j][2]//2, pred_boxes[j][1]+pred_boxes[j][3]//2), (pred_boxes[j][2], pred_boxes[j][3]), angle)
+                    box = cv2.boxPoints(rect)
+                    box = np.int0(box)
+                    cv2.drawContours(img, [box], 0, (0, 0, 255), 2)
+                    for k in range(5,15,2):
+                        cv2.circle(img, (int(pred[j][k]), int(pred[j][k+1])), 1, (0,255,255),4)
+                if gt[i, 5:15].sum() == -10:
+                    break
+
+                landmark_pred.append(pred[j, 5:15])
+                landmark_gt.append(gt[i,5:15].numpy())
+                if len(pred[j]) > 15:
+                    alignment_pred.append(pred[j,15:18])
+                    alignment_gt.append(gt[i,15:18].numpy())
+                break
+
+        if not box_matched:
+            false_negative += 1
+
+    false_positive = len(pred_boxes) - true_positive
+
+    accuracy = true_positive / (true_positive + false_positive + false_negative) if (true_positive + false_positive + false_negative) > 0 else 0.0
+
+    return accuracy,landmark_pred,landmark_gt,alignment_pred,alignment_gt, img
+# mAP for face detection
+def calculate_precision_recall(gt_boxes, pred_boxes, confidence_scores, iou_threshold=0.5):
+    """
+    Calculate precision and recall values for different confidence score thresholds.
+    """
+    num_gt_boxes = len(gt_boxes)
+    num_pred_boxes = len(pred_boxes)
+
+    sorted_indices = np.argsort(confidence_scores)[::-1]
+    tp = np.zeros(num_pred_boxes)
+    fp = np.zeros(num_pred_boxes)
+    precision = np.zeros(num_pred_boxes)
+    recall = np.zeros(num_pred_boxes)
+
+    for i in range(num_pred_boxes):
+        pred_box = pred_boxes[sorted_indices[i]]
+        max_iou = 0
+        max_iou_index = -1
+
+        for j in range(num_gt_boxes):
+            iou = calculate_iou(gt_boxes[j], pred_box)
+            if iou > max_iou:
+                max_iou = iou
+                max_iou_index = j
+
+        if max_iou >= iou_threshold:
+            if not gt_boxes[max_iou_index][-1]:  # Check if the ground truth box is not already matched
+                tp[i] = 1
+                gt_boxes[max_iou_index][-1] = 1  # Mark the ground truth box as matched
+            else:
+                fp[i] = 1
+        else:
+            fp[i] = 1
+
+        precision[i] = np.sum(tp) / (np.sum(tp) + np.sum(fp))
+        recall[i] = np.sum(tp) / num_gt_boxes
+
+    return precision, recall
+
+def calculate_ap(precision, recall):
+    """
+    Calculate Average Precision (AP) from precision and recall values.
+    """
+    ap = 0
+    recall_range = np.arange(0.0, 1.1, 0.1)
+
+    for r in recall_range:
+        recall_mask = (recall >= r)
+        if np.any(recall_mask):
+            ap += np.max(precision[recall_mask])
+
+    ap /= 11.0  # 11 recall values (0.0, 0.1, ..., 1.0)
+    return ap
 
 
 def read_pred_file(filepath):
@@ -86,18 +193,15 @@ def read_pred_file(filepath):
         img_file = lines[0].rstrip('\n\r')
         lines = lines[2:]
 
-    # b = lines[0].rstrip('\r\n').split(' ')[:-1]
-    # c = float(b)
-    # a = map(lambda x: [[float(a[0]), float(a[1]), float(a[2]), float(a[3]), float(a[4])] for a in x.rstrip('\r\n').split(' ')], lines)
     boxes = []
     for line in lines:
         line = line.rstrip('\r\n').split(' ')
         if line[0] == '':
             continue
         # a = float(line[4])
-        boxes.append([float(line[0]), float(line[1]), float(line[2]), float(line[3]), float(line[4])])
+        line = list(map(float, line))
+        boxes.append(line)
     boxes = np.array(boxes)
-    # boxes = np.array(list(map(lambda x: [float(a) for a in x.rstrip('\r\n').split(' ')], lines))).astype('float')
     return img_file.split('/')[-1], boxes
 
 
@@ -117,7 +221,6 @@ def get_preds(pred_dir):
         boxes[event] = current_event
     return boxes
 
-
 def norm_score(pred):
     """ norm score
     pred {key: [[x1,y1,x2,y2,s]]}
@@ -130,8 +233,8 @@ def norm_score(pred):
         for _, v in k.items():
             if len(v) == 0:
                 continue
-            _min = np.min(v[:, -1])
-            _max = np.max(v[:, -1])
+            _min = np.min(v[:, 4])
+            _max = np.max(v[:, 4])
             max_score = max(_max, max_score)
             min_score = min(_min, min_score)
 
@@ -140,155 +243,100 @@ def norm_score(pred):
         for _, v in k.items():
             if len(v) == 0:
                 continue
-            v[:, -1] = (v[:, -1] - min_score)/diff
+            v[:, 4] = (v[:, 4] - min_score)/diff
 
 
-def image_eval(pred, gt, ignore, iou_thresh):
-    """ single image evaluation
-    pred: Nx5
-    gt: Nx4
-    ignore:
-    """
-
-    _pred = pred.copy()
-    _gt = gt.copy()
-    pred_recall = np.zeros(_pred.shape[0])
-    recall_list = np.zeros(_gt.shape[0])
-    proposal_list = np.ones(_pred.shape[0])
-
-    _pred[:, 2] = _pred[:, 2] + _pred[:, 0]
-    _pred[:, 3] = _pred[:, 3] + _pred[:, 1]
-    _gt[:, 2] = _gt[:, 2] + _gt[:, 0]
-    _gt[:, 3] = _gt[:, 3] + _gt[:, 1]
-
-    overlaps = bbox_overlaps(_pred[:, :4], _gt)
-
-    for h in range(_pred.shape[0]):
-
-        gt_overlap = overlaps[h]
-        max_overlap, max_idx = gt_overlap.max(), gt_overlap.argmax()
-        if max_overlap >= iou_thresh:
-            if ignore[max_idx] == 0:
-                recall_list[max_idx] = -1
-                proposal_list[h] = -1
-            elif recall_list[max_idx] == 0:
-                recall_list[max_idx] = 1
-
-        r_keep_index = np.where(recall_list == 1)[0]
-        pred_recall[h] = len(r_keep_index)
-    return pred_recall, proposal_list
-
-
-def img_pr_info(thresh_num, pred_info, proposal_list, pred_recall):
-    pr_info = np.zeros((thresh_num, 2)).astype('float')
-    for t in range(thresh_num):
-
-        thresh = 1 - (t+1)/thresh_num
-        r_index = np.where(pred_info[:, 4] >= thresh)[0]
-        if len(r_index) == 0:
-            pr_info[t, 0] = 0
-            pr_info[t, 1] = 0
-        else:
-            r_index = r_index[-1]
-            p_index = np.where(proposal_list[:r_index+1] == 1)[0]
-            pr_info[t, 0] = len(p_index)
-            pr_info[t, 1] = pred_recall[r_index]
-    return pr_info
-
-
-def dataset_pr_info(thresh_num, pr_curve, count_face):
-    _pr_curve = np.zeros((thresh_num, 2))
-    for i in range(thresh_num):
-        _pr_curve[i, 0] = pr_curve[i, 1] / pr_curve[i, 0]
-        _pr_curve[i, 1] = pr_curve[i, 1] / count_face
-    return _pr_curve
-
-
-def voc_ap(rec, prec):
-
-    # correct AP calculation
-    # first append sentinel values at the end
-    mrec = np.concatenate(([0.], rec, [1.]))
-    mpre = np.concatenate(([0.], prec, [0.]))
-
-    # compute the precision envelope
-    for i in range(mpre.size - 1, 0, -1):
-        mpre[i - 1] = np.maximum(mpre[i - 1], mpre[i])
-
-    # to calculate area under PR curve, look for points
-    # where X axis (recall) changes value
-    i = np.where(mrec[1:] != mrec[:-1])[0]
-
-    # and sum (\Delta recall) * prec
-    ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
-    return ap
-
-
-def evaluation(pred, gt_path, iou_thresh=0.5):
+def evaluation(pred, gt_path, baseline,threshold, iou_thresh=0.5):
     pred = get_preds(pred)
     norm_score(pred)
-    facebox_list, event_list, file_list, hard_gt_list, medium_gt_list, easy_gt_list = get_gt_boxes(gt_path)
-    event_num = len(event_list)
-    thresh_num = 1000
-    settings = ['easy', 'medium', 'hard']
-    setting_gts = [easy_gt_list, medium_gt_list, hard_gt_list]
-    aps = []
-    for setting_id in range(3):
-        # different setting
-        gt_list = setting_gts[setting_id]
-        count_face = 0
-        pr_curve = np.zeros((thresh_num, 2)).astype('float')
-        # [hard, medium, easy]
-        pbar = tqdm.tqdm(range(event_num))
-        for i in pbar:
-            pbar.set_description('Processing {}'.format(settings[setting_id]))
-            event_name = str(event_list[i][0][0])
-            img_list = file_list[i][0]
-            pred_list = pred[event_name]
-            sub_gt_list = gt_list[i][0]
-            # img_pr_info_list = np.zeros((len(img_list), thresh_num, 2))
-            gt_bbx_list = facebox_list[i][0]
-
-            for j in range(len(img_list)):
-                pred_info = pred_list[str(img_list[j][0][0])]
-
-                gt_boxes = gt_bbx_list[j][0].astype('float')
-                keep_index = sub_gt_list[j][0]
-                count_face += len(keep_index)
-
-                if len(gt_boxes) == 0 or len(pred_info) == 0:
+    accuracy_total = []
+    nme_total = []
+    mae_total = []
+    ap_total = []
+    for folder, k in pred.items():
+        for pic, v in k.items():
+            with open(gt_path+pic+'_refine.txt', 'r') as f:
+                if len(v) == 0:
+                    accuracy_total.append(0)
                     continue
-                ignore = np.zeros(gt_boxes.shape[0])
-                if len(keep_index) != 0:
-                    ignore[keep_index-1] = 1
-                pred_recall, proposal_list = image_eval(pred_info, gt_boxes, ignore, iou_thresh)
+                lines = f.readlines()
+                gt = []
+                img0 = cv2.imread(gt_path+pic+'.jpg')
+                h,w, c = img0.shape
+                for line in lines:
+                    line = line.replace('  ', ' ')
+                    line = line.rstrip('\r\n').split(' ')
+                    line = list(map(float, line))
+                    line[1:5:2] = [i * w for i in line[1:5:2]]
+                    line[2:5:2] = [i * h for i in line[2:5:2]]
+                    line[5:15:2] = [i * w for i in line[5:15:2]]
+                    line[6:15:2] = [i * h for i in line[6:15:2]]
+                    line[17] = line[22]
+                    line[18:22:2] = [i * w for i in line[18:22:2]]
+                    line[19:22:2] = [i * h for i in line[19:22:2]]
+                    gt.append(line)
+            gt = torch.as_tensor(gt)
+            v = v[v[...,4]>threshold]
+            pred_boxes = v[...,0:4]
+            if baseline:
+                gt_boxes = gt[...,1:5].numpy()
+            else:
+                gt_boxes = gt[...,18:22].numpy()
 
-                _img_pr_info = img_pr_info(thresh_num, pred_info, proposal_list, pred_recall)
+            accuracy, landmark_pred,landmark_gt,alignment_pred,alignment_gt, img = face_detection_accuracy(gt_boxes,v, gt, img0)
+            accuracy_total.append(accuracy)
+            
+            gt_boxes = [[x1, y1, w1, h1, 0] for x1, y1, w1, h1 in gt_boxes]  # 0 at the end is a flag for matching
+            pred_boxes = [[x2, y2, w2, h2] for x2, y2, w2, h2 in pred_boxes]
+            confidence_scores = v[...,4]
 
-                pr_curve += _img_pr_info
-        pr_curve = dataset_pr_info(thresh_num, pr_curve, count_face)
+            precision, recall = calculate_precision_recall(gt_boxes, pred_boxes, confidence_scores)
+            ap = calculate_ap(precision, recall)
+            ap_total.append(ap)
 
-        propose = pr_curve[:, 0]
-        recall = pr_curve[:, 1]
+            
+            if len(landmark_pred)>0:
+                nme = mean_euclidean_distance(np.array(landmark_pred), np.array(landmark_gt))
+                nme_total.append(nme)
+            if len(alignment_pred)>0:
+                mae = euler_angles_mae(np.array(alignment_pred), np.array(alignment_gt))
+                mae_total.append(mae)
+            if saveResultImg:
+                cv2.imwrite(output_folder+pic+'.jpg', img)
+            # print(folder, pic)
 
-        ap = voc_ap(recall, propose)
-        aps.append(ap)
-
+    if len(accuracy_total)>0:
+        accuracy_final = np.array(accuracy_total).mean()
+        map_final = np.array(ap_total).mean()
+    else:
+        accuracy_final = 0
+        map_final = 0
+    if len(nme_total)>0:
+        nme_final = np.array(nme_total).mean()
+    else:
+        nme_final = 'none'
+    if len(mae_total)>0:
+        mae_final = np.array(mae_total).mean()
+    else:
+        mae_final = 'none'
+    print(args.pred)
     print("==================== Results ====================")
-    print("Easy   Val AP: {}".format(aps[0]))
-    print("Medium Val AP: {}".format(aps[1]))
-    print("Hard   Val AP: {}".format(aps[2]))
+    print("Accuracy: {}".format(accuracy_final))
+    print("mAP: {}".format(map_final))
+    print("NME: {}".format(nme_final))
+    print("MAE: {}".format(mae_final))
     print("=================================================")
 
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('-p', '--pred', default="./widerface_txt/")
-    parser.add_argument('-g', '--gt', default='./ground_truth/')
-
+    parser.add_argument('-p', '--pred', default="widerface_evaluate/widerface_txt_origin_newdata/")
+    parser.add_argument('-g', '--gt', default='dataset/widerface_multitask/val/')
+    parser.add_argument('-b', '--baseline', default=False)
+    parser.add_argument('-th', '--threshold', default=0.1)
     args = parser.parse_args()
-    evaluation(args.pred, args.gt)
+    evaluation(args.pred, args.gt, args.baseline, args.threshold)
 
 
 

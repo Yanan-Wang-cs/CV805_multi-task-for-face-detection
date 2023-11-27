@@ -51,29 +51,31 @@ def wider2face(root, phase='val', ignore_small=0):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 1:
-        print('Missing path to WIDERFACE folder.')
-        print('Run command: python3 val2yolo.py /path/to/original/widerface [/path/to/save/widerface/val]')
-        exit(1)
-    elif len(sys.argv) > 3:
-        print('Too many arguments were provided.')
-        print('Run command: python3 val2yolo.py /path/to/original/widerface [/path/to/save/widerface/val]')
-        exit(1)
+    # if len(sys.argv) == 1:
+    #     print('Missing path to WIDERFACE folder.')
+    #     print('Run command: python3 val2yolo.py /path/to/original/widerface [/path/to/save/widerface/val]')
+    #     exit(1)
+    # elif len(sys.argv) > 3:
+    #     print('Too many arguments were provided.')
+    #     print('Run command: python3 val2yolo.py /path/to/original/widerface [/path/to/save/widerface/val]')
+    #     exit(1)
 
-    root_path = sys.argv[1]
-    if not os.path.isfile(os.path.join(root_path, 'val', 'label.txt')):
-        print('Missing label.txt file.')
-        exit(1)
+    # root_path = sys.argv[1]
+    root_path = '/home/yanan/cv/yolov5-face/dataset/origin/WIDER_val'
+    save_path = '/home/yanan/cv/yolov5-face/dataset/widerface/val'
+    # if not os.path.isfile(os.path.join(root_path, 'val', 'label.txt')):
+    #     print('Missing label.txt file.')
+    #     exit(1)
 
-    if len(sys.argv) == 2:
-        if not os.path.isdir('widerface'):
-            os.mkdir('widerface')
-        if not os.path.isdir('widerface/val'):
-            os.mkdir('widerface/val')
+    # if len(sys.argv) == 2:
+    #     if not os.path.isdir('widerface'):
+    #         os.mkdir('widerface')
+    #     if not os.path.isdir('widerface/val'):
+    #         os.mkdir('widerface/val')
 
-        save_path = 'widerface/val'
-    else:
-        save_path = sys.argv[2]
+    #     save_path = 'widerface/val'
+    # else:
+    #     save_path = sys.argv[2]
 
     datas = wider2face(root_path, phase='val')
     for idx, data in enumerate(datas.keys()):
