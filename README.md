@@ -1,9 +1,13 @@
 Install the environment:
+
 conda env create -f CV805.yaml
+
 conda activate CV805
+
 pip install tensorboard
 
 Download the data and model from following link:
+
 https://mbzuaiac-my.sharepoint.com/:f:/g/personal/yanan_wang_mbzuai_ac_ae/EnQj-UX8n9xKrVdgH_kjwtkBcEBqWJZIjJu00prKhZ_qaA?e=eQRghq
 
 Extract the data and model, placing the extracted dataset(widerface_multitask.tar.gz) under the "dataset" folder (./dataset/widerface_multitask) and the models(trained_models.tar.gz) in the root folder(./runs_*). Beside, you can extract the output of the models(trained_models_output.tar.gz) and put them under the "widerface_evaluate" folder (./widerface_evaluate/widerface_txt_*)
